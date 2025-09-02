@@ -20,7 +20,7 @@ namespace AutoCloseManagerPlugin
         public bool EnableAutoClose { get; set; } = true;
         public int GracefulCloseTimeoutSeconds { get; set; } = 10;
         public bool ShowNotifications { get; set; } = true;
-        public int CloseDelayMs { get; set; } = 100; // Updated to 0.1 seconds
+        public int CloseDelayMs { get; set; } = 1; // Updated to 0.01 seconds
 
         public AutoCloseManagerSettings()
         {
