@@ -1,25 +1,27 @@
 ﻿// AutoCloseManager.cs
+
 using System;
 using System.Diagnostics;
 using System.Linq;
-using System.Threading.Tasks;
-using System.Windows;
 using System.Collections.Generic;
 using Playnite.SDK;
 using Playnite.SDK.Events;
 using Playnite.SDK.Models;
 using Playnite.SDK.Plugins;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading;
 
 namespace AutoCloseManagerPlugin
 {
     public class AutoCloseManagerSettings : ObservableObject, ISettings
     {
         public bool EnableAutoClose { get; set; } = true;
-        public int CloseTimeoutSeconds { get; set; } = 5;
+        public int GracefulCloseTimeoutSeconds { get; set; } = 10;
         public bool ShowNotifications { get; set; } = true;
+        public int CloseDelayMs { get; set; } = 100; // Updated to 0.1 seconds
 
-        // Playnite serializes settings object to a JSON object and saves it as text file.
-        // If you want to exclude some property from being saved then use `JsonDontSerialize` ignore attribute.
         public AutoCloseManagerSettings()
         {
         }
@@ -27,32 +29,17 @@ namespace AutoCloseManagerPlugin
         public AutoCloseManagerSettings(AutoCloseManagerSettings source)
         {
             EnableAutoClose = source.EnableAutoClose;
-            CloseTimeoutSeconds = source.CloseTimeoutSeconds;
+            GracefulCloseTimeoutSeconds = source.GracefulCloseTimeoutSeconds;
             ShowNotifications = source.ShowNotifications;
+            CloseDelayMs = source.CloseDelayMs;
         }
 
-        public void BeginEdit()
-        {
-            // Code executed when settings view is opened and user starts editing them.
-        }
-
-        public void CancelEdit()
-        {
-            // Code executed when user decides to cancel any changes made since BeginEdit was called.
-            // This method should revert any changes made to Option1 and Option2.
-        }
-
-        public void EndEdit()
-        {
-            // Code executed when user decides to confirm changes made since BeginEdit was called.
-            // This method should save settings made to Option1 and Option2.
-        }
+        public void BeginEdit() { }
+        public void CancelEdit() { }
+        public void EndEdit() { }
 
         public bool VerifySettings(out List<string> errors)
         {
-            // Code execute when user decides to confirm changes made since BeginEdit was called.
-            // Executed before EndEdit is called and EndEdit is not called if false is returned.
-            // List of errors is presented to user if verification fails.
             errors = new List<string>();
             return true;
         }
@@ -62,78 +49,53 @@ namespace AutoCloseManagerPlugin
     {
         private static readonly ILogger logger = LogManager.GetLogger();
         private AutoCloseManagerSettings settings { get; set; }
+        private readonly ProcessFinder processFinder;
 
-        public override Guid Id { get; } = Guid.Parse("12345678-1234-5678-9012-123456789012"); // Generate a unique GUID
+        public override Guid Id { get; } = Guid.Parse("12345678-1234-5678-9012-123456789012");
 
         public AutoCloseManager(IPlayniteAPI api) : base(api)
         {
+            logger.Info("AutoCloseManager plugin has been initialized.");
             settings = new AutoCloseManagerSettings();
             Properties = new GenericPluginProperties
             {
                 HasSettings = true
             };
-        }
-
-        public override void OnGameInstalled(OnGameInstalledEventArgs args)
-        {
-            // Add code to be executed when game is finished installing.
-        }
-
-        public override void OnGameStarted(OnGameStartedEventArgs args)
-        {
-            // Add code to be executed when game is started running.
+            this.processFinder = new ProcessFinder();
         }
 
         public override void OnGameStarting(OnGameStartingEventArgs args)
         {
-            // Add code to be executed when game is preparing to be started.
+            logger.Info($"AutoClose: OnGameStarting event triggered for '{args.Game.Name}'.");
             if (settings.EnableAutoClose)
             {
                 OnGameStartingHandler(args.Game);
             }
         }
 
-        public override void OnGameStopped(OnGameStoppedEventArgs args)
-        {
-            // Add code to be executed when game is stopped running.
-        }
-
-        public override void OnGameUninstalled(OnGameUninstalledEventArgs args)
-        {
-            // Add code to be executed when game is uninstalled.
-        }
-
         public override void OnApplicationStarted(OnApplicationStartedEventArgs args)
         {
-            // Add code to be executed when Playnite is initialized.
             logger.Info("AutoCloseManager plugin started");
         }
 
         public override void OnApplicationStopped(OnApplicationStoppedEventArgs args)
         {
-            // Add code to be executed when Playnite is shutting down.
             logger.Info("AutoCloseManager plugin stopped");
         }
 
-        public override void OnLibraryUpdated(OnLibraryUpdatedEventArgs args)
-        {
-            // Add code to be executed when library is updated.
-        }
-
-        private async void OnGameStartingHandler(Game newGame)
+        private void OnGameStartingHandler(Game newGame)
         {
             try
             {
-                logger.Info($"Game starting: {newGame.Name}");
+                logger.Info($"AutoClose: New game starting: {newGame.Name}");
 
-                // Check if there's already a running game
                 var runningGames = PlayniteApi.Database.Games
                     .Where(g => g.IsRunning && g.Id != newGame.Id)
                     .ToList();
 
                 if (runningGames.Any())
                 {
-                    logger.Info($"Found {runningGames.Count} running game(s). Attempting to close them.");
+                    logger.Info($"AutoClose: Detected {runningGames.Count} other games still running. Closing them now.");
 
                     if (settings.ShowNotifications)
                     {
@@ -146,12 +108,15 @@ namespace AutoCloseManagerPlugin
 
                     foreach (var runningGame in runningGames)
                     {
-                        await CloseRunningGame(runningGame);
+                        CloseRunningGame(runningGame);
                     }
-                }
 
-                // Wait a moment for processes to fully close
-                await Task.Delay(1000);
+                    logger.Info($"AutoClose: Finished closing games. Playnite will now launch {newGame.Name}.");
+                }
+                else
+                {
+                    logger.Info("AutoClose: No other games detected as running. No action needed.");
+                }
             }
             catch (Exception ex)
             {
@@ -159,34 +124,40 @@ namespace AutoCloseManagerPlugin
             }
         }
 
-        private async Task CloseRunningGame(Game game)
+        private void CloseRunningGame(Game game)
         {
             try
             {
                 logger.Info($"Attempting to close running game: {game.Name}");
-
-                // Try multiple methods to close the game
                 bool closed = false;
 
-                // Method 1: Try to find and close by window title
-                closed = await CloseByWindowTitle(game);
+                var processToClose = processFinder.FindRunningGameProcess(game, null);
 
-                // Method 2: Try to close by process name if window method failed
-                if (!closed)
+                if (processToClose != null)
                 {
-                    closed = await CloseByProcessName(game);
-                }
+                    logger.Info($"Delaying close of {game.Name} for {settings.CloseDelayMs}ms.");
+                    Thread.Sleep(settings.CloseDelayMs);
 
-                // Method 3: Force close by executable path
-                if (!closed)
-                {
-                    closed = await ForceCloseByExecutable(game);
+                    logger.Info($"Attempting graceful close for process: {processToClose.ProcessName} (ID: {processToClose.Id})");
+                    processToClose.CloseMainWindow();
+
+                    if (WaitForProcessExit(processToClose, settings.GracefulCloseTimeoutSeconds * 1000))
+                    {
+                        closed = true;
+                    }
+
+                    if (!closed && !processToClose.HasExited)
+                    {
+                        logger.Info("Graceful close failed. Forcefully killing the process.");
+                        processToClose.Kill();
+                        WaitForProcessExit(processToClose, 3000);
+                        closed = true;
+                    }
                 }
 
                 if (closed)
                 {
                     logger.Info($"Successfully closed game: {game.Name}");
-
                     if (settings.ShowNotifications)
                     {
                         PlayniteApi.Notifications.Add(new NotificationMessage(
@@ -199,7 +170,6 @@ namespace AutoCloseManagerPlugin
                 else
                 {
                     logger.Warn($"Failed to close game: {game.Name}");
-
                     if (settings.ShowNotifications)
                     {
                         PlayniteApi.Notifications.Add(new NotificationMessage(
@@ -216,170 +186,244 @@ namespace AutoCloseManagerPlugin
             }
         }
 
-        private async Task<bool> CloseByWindowTitle(Game game)
+        private bool WaitForProcessExit(Process process, int timeoutMs)
         {
             try
             {
-                var processes = Process.GetProcesses()
-                    .Where(p => !string.IsNullOrEmpty(p.MainWindowTitle) &&
-                               (p.MainWindowTitle.IndexOf(game.Name, StringComparison.OrdinalIgnoreCase) >= 0 ||
-                                game.Name.IndexOf(p.MainWindowTitle, StringComparison.OrdinalIgnoreCase) >= 0))
-                    .ToList();
-
-                foreach (var process in processes)
-                {
-                    try
-                    {
-                        logger.Info($"Closing process by window title: {process.ProcessName} ({process.MainWindowTitle})");
-
-                        // Try graceful close first
-                        process.CloseMainWindow();
-
-                        // Wait for graceful close
-                        if (await WaitForProcessExit(process, settings.CloseTimeoutSeconds * 1000))
-                        {
-                            return true;
-                        }
-
-                        // Force kill if still running
-                        if (!process.HasExited)
-                        {
-                            process.Kill();
-                            await WaitForProcessExit(process, 3000);
-                            return true;
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.Error(ex, $"Error closing process: {process.ProcessName}");
-                    }
-                }
-
-                return processes.Any();
-            }
-            catch (Exception ex)
-            {
-                logger.Error(ex, "Error in CloseByWindowTitle");
-                return false;
-            }
-        }
-
-        private async Task<bool> CloseByProcessName(Game game)
-        {
-            try
-            {
-                if (game.GameActions?.Any() == true)
-                {
-                    foreach (var action in game.GameActions)
-                    {
-                        if (!string.IsNullOrEmpty(action.Path))
-                        {
-                            var processName = System.IO.Path.GetFileNameWithoutExtension(action.Path);
-                            var processes = Process.GetProcessesByName(processName);
-
-                            foreach (var process in processes)
-                            {
-                                try
-                                {
-                                    logger.Info($"Closing process by name: {process.ProcessName}");
-
-                                    process.CloseMainWindow();
-                                    if (await WaitForProcessExit(process, settings.CloseTimeoutSeconds * 1000))
-                                    {
-                                        return true;
-                                    }
-
-                                    if (!process.HasExited)
-                                    {
-                                        process.Kill();
-                                        await WaitForProcessExit(process, 3000);
-                                        return true;
-                                    }
-                                }
-                                catch (Exception ex)
-                                {
-                                    logger.Error(ex, $"Error closing process: {process.ProcessName}");
-                                }
-                            }
-                        }
-                    }
-                }
-
-                return false;
-            }
-            catch (Exception ex)
-            {
-                logger.Error(ex, "Error in CloseByProcessName");
-                return false;
-            }
-        }
-
-        private async Task<bool> ForceCloseByExecutable(Game game)
-        {
-            try
-            {
-                if (game.GameActions?.Any() == true)
-                {
-                    foreach (var action in game.GameActions.Where(a => !string.IsNullOrEmpty(a.Path)))
-                    {
-                        var processes = Process.GetProcesses()
-                            .Where(p =>
-                            {
-                                try
-                                {
-                                    return p.MainModule?.FileName?.Equals(action.Path, StringComparison.OrdinalIgnoreCase) == true;
-                                }
-                                catch
-                                {
-                                    return false;
-                                }
-                            })
-                            .ToList();
-
-                        foreach (var process in processes)
-                        {
-                            try
-                            {
-                                logger.Info($"Force closing process: {process.ProcessName}");
-                                process.Kill();
-                                await WaitForProcessExit(process, 3000);
-                                return true;
-                            }
-                            catch (Exception ex)
-                            {
-                                logger.Error(ex, $"Error force closing process: {process.ProcessName}");
-                            }
-                        }
-                    }
-                }
-
-                return false;
-            }
-            catch (Exception ex)
-            {
-                logger.Error(ex, "Error in ForceCloseByExecutable");
-                return false;
-            }
-        }
-
-        private async Task<bool> WaitForProcessExit(Process process, int timeoutMs)
-        {
-            try
-            {
-                return await Task.Run(() =>
-                {
-                    return process.WaitForExit(timeoutMs);
-                });
+                return process.WaitForExit(timeoutMs);
             }
             catch
             {
-                return true; // Assume it exited if we can't check
+                return true;
             }
         }
 
         public override ISettings GetSettings(bool firstRunSettings)
         {
             return settings;
+        }
+
+        public override System.Windows.Controls.UserControl GetSettingsView(bool firstRunSettings)
+        {
+            return null;
+        }
+    }
+
+    public class ProcessFinder
+    {
+        private static readonly ILogger logger = LogManager.GetLogger();
+
+        public Process FindRunningGameProcess(Game game, int? pid)
+        {
+            if (game == null) return null;
+
+            try
+            {
+                var candidateProcesses = Process.GetProcesses().Where(p =>
+                {
+                    try
+                    {
+                        return !p.HasExited &&
+                               p.MainWindowHandle != IntPtr.Zero &&
+                               !string.IsNullOrEmpty(p.MainWindowTitle) &&
+                               p.WorkingSet64 > 100 * 1024 * 1024;
+                    }
+                    catch
+                    {
+                        return false;
+                    }
+                }).ToList();
+
+                logger.Debug($"Found {candidateProcesses.Count} candidate processes with windows");
+                var gameExecutables = GetGameExecutables(game);
+                string[] gameNameWords = game.Name.ToLower().Split(new char[] { ' ', '-', '_', ':', '.', '(', ')', '[', ']' },
+                    StringSplitOptions.RemoveEmptyEntries);
+                logger.Debug($"Game name for matching: {game.Name}, split into {gameNameWords.Length} words");
+
+                var candidates = new List<Process>();
+                var nameMatchCandidates = new List<Process>();
+                var titleMatchCandidates = new List<(Process Process, int MatchCount)>();
+                var inaccessibleCandidates = new List<Process>();
+
+                foreach (var p in candidateProcesses)
+                {
+                    try
+                    {
+                        bool nameMatches = gameExecutables.Any(exe =>
+                            string.Equals(exe, p.ProcessName, StringComparison.OrdinalIgnoreCase));
+                        int titleMatchScore = CalculateTitleMatchScore(p, gameNameWords);
+                        string modulePath = null;
+                        try
+                        {
+                            modulePath = p.MainModule.FileName;
+                        }
+                        catch
+                        {
+                            modulePath = GetProcessPath(p);
+                        }
+
+                        if (!string.IsNullOrEmpty(modulePath) && !string.IsNullOrEmpty(game.InstallDirectory) &&
+                            modulePath.ToLower().IndexOf(game.InstallDirectory.ToLower()) >= 0)
+                        {
+                            candidates.Add(p);
+                            logger.Debug($"Found process with matching path: {p.ProcessName} -> {modulePath}");
+                        }
+                        else if (nameMatches)
+                        {
+                            nameMatchCandidates.Add(p);
+                        }
+                        else if (titleMatchScore > 0)
+                        {
+                            titleMatchCandidates.Add((p, titleMatchScore));
+                        }
+                        else if (string.IsNullOrEmpty(modulePath))
+                        {
+                            inaccessibleCandidates.Add(p);
+                        }
+                    }
+                    catch { /* Skip processes we can't access at all */ }
+                }
+
+                var bestMatch = FindBestMatch(candidates, titleMatchCandidates, nameMatchCandidates, inaccessibleCandidates, pid);
+                return bestMatch;
+            }
+            catch (Exception ex)
+            {
+                logger.Error($"Error finding game process: {ex.Message}");
+                return null;
+            }
+        }
+
+        private string GetProcessPath(Process process)
+        {
+            try
+            {
+                IntPtr handle = OpenProcess(ProcessAccessFlags.QueryLimitedInformation, false, process.Id);
+                if (handle == IntPtr.Zero)
+                    return null;
+
+                try
+                {
+                    var buffer = new StringBuilder(1024);
+                    uint size = (uint)buffer.Capacity;
+                    if (QueryFullProcessImageName(handle, 0, buffer, ref size))
+                    {
+                        return buffer.ToString();
+                    }
+                }
+                finally
+                {
+                    CloseHandle(handle);
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.Debug($"Error getting process path for {process.ProcessName}: {ex.Message}");
+            }
+            return null;
+        }
+
+        private static int CalculateTitleMatchScore(Process process, string[] gameNameWords)
+        {
+            if (process.MainWindowHandle == IntPtr.Zero || string.IsNullOrEmpty(process.MainWindowTitle))
+                return 0;
+            string[] windowTitleWords = process.MainWindowTitle.ToLower().Split(
+                new char[] { ' ', '-', '_', ':', '.', '(', ')', '[', ']' },
+                StringSplitOptions.RemoveEmptyEntries);
+
+            return gameNameWords.Count(gameWord =>
+                windowTitleWords.Any(titleWord =>
+                    titleWord.IndexOf(gameWord) >= 0 ||
+                    gameWord.IndexOf(titleWord) >= 0));
+        }
+
+        private static Process FindBestMatch(
+            List<Process> candidates,
+            List<(Process Process, int MatchCount)> titleMatchCandidates,
+            List<Process> nameMatchCandidates,
+            List<Process> inaccessibleCandidates,
+            int? originalPid)
+        {
+            if (candidates.Count > 0)
+            {
+                var bestMatch = candidates.OrderByDescending(p => p.WorkingSet64).First();
+                logger.Debug($"Found process with matching path: {bestMatch.ProcessName} (ID: {bestMatch.Id})");
+                return bestMatch;
+            }
+            if (nameMatchCandidates.Count > 0)
+            {
+                var bestMatch = nameMatchCandidates.OrderByDescending(p => p.WorkingSet64).First();
+                logger.Debug($"Found process with matching name: {bestMatch.ProcessName} (ID: {bestMatch.Id})");
+                return bestMatch;
+            }
+            if (titleMatchCandidates.Count > 0)
+            {
+                var bestMatch = titleMatchCandidates.OrderByDescending(t => t.MatchCount)
+                                                    .ThenByDescending(t => t.Process.WorkingSet64)
+                                                    .First().Process;
+                logger.Debug($"Found process with matching window title: {bestMatch.ProcessName} (ID: {bestMatch.Id}, Title: {bestMatch.MainWindowTitle})");
+                return bestMatch;
+            }
+            if (inaccessibleCandidates.Count > 0)
+            {
+                var processFromPlaynite = inaccessibleCandidates.FirstOrDefault(p => p.Id == originalPid);
+                if (processFromPlaynite != null)
+                {
+                    logger.Debug($"Found original process: {processFromPlaynite.ProcessName} (ID: {processFromPlaynite.Id})");
+                    return processFromPlaynite;
+                }
+                var bestGuess = inaccessibleCandidates.OrderByDescending(p => p.WorkingSet64).First();
+                logger.Debug($"Best guess from inaccessible processes: {bestGuess.ProcessName} (ID: {bestGuess.Id})");
+                return bestGuess;
+            }
+            return null;
+        }
+
+        private static List<string> GetGameExecutables(Game game)
+        {
+            var gameExecutables = new List<string>();
+            try
+            {
+                if (!string.IsNullOrEmpty(game.InstallDirectory) && Directory.Exists(game.InstallDirectory))
+                {
+                    gameExecutables = Directory.GetFiles(game.InstallDirectory, "*.exe", SearchOption.AllDirectories)
+                        .Select(path => Path.GetFileNameWithoutExtension(path))
+                        .ToList();
+                    var additionalNames = new List<string>();
+                    foreach (var exe in gameExecutables)
+                    {
+                        additionalNames.Add(exe.Replace("-", ""));
+                        additionalNames.Add(exe.Replace("_", ""));
+                        additionalNames.Add(exe.Replace(" ", ""));
+                        additionalNames.Add(exe.Replace("-", " "));
+                        additionalNames.Add(exe.Replace("_", " "));
+                    }
+                    gameExecutables.AddRange(additionalNames);
+                    logger.Debug($"Found {gameExecutables.Count} potential game executables in {game.InstallDirectory}");
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.Error($"Error scanning game directory: {ex.Message}");
+            }
+            return gameExecutables;
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool CloseHandle(IntPtr hObject);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern IntPtr OpenProcess(ProcessAccessFlags processAccess, bool bInheritHandle, int processId);
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern bool QueryFullProcessImageName(IntPtr hProcess, uint dwFlags,
+            StringBuilder lpExeName, ref uint lpdwSize);
+
+        [Flags]
+        private enum ProcessAccessFlags : uint
+        {
+            QueryInformation = 0x00000400,
+            QueryLimitedInformation = 0x1000
         }
     }
 }

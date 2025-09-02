@@ -1,0 +1,10 @@
+﻿Id: AutoCloseManager_4c0e2ce9-c19a-4739-834b-bb5c81793906
+Name: AutoCloseManager
+Author: Artzox
+Version: 1.0
+Module: AutoCloseManager.dll
+Type: GenericPlugin
+Icon: icon.png
+Links:
+  - Name: Support
+    Url: https://github.com/artzox/AutoCloseManager
