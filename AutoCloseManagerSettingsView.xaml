@@ -1,14 +1,63 @@
-﻿<UserControl x:Class="AutoCloseManager.AutoCloseManagerSettingsView"
+﻿<UserControl x:Class="AutoCloseManagerPlugin.AutoCloseManagerSettingsView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-             mc:Ignorable="d"
-             d:DesignHeight="400" d:DesignWidth="600">
-    <StackPanel>
-        <TextBlock Text="Description for Option1:"/>
-        <TextBox Text="{Binding Settings.Option1}"/>
-        <TextBlock Text="Description for Option2:"/>
-        <CheckBox IsChecked="{Binding Settings.Option2}"/>
-    </StackPanel>
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
+             xmlns:local="clr-namespace:AutoCloseManagerPlugin"
+             mc:Ignorable="d" 
+             d:DesignHeight="450" d:DesignWidth="800">
+    <Grid Margin="20">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Label Grid.Row="0" Grid.Column="0" Content="Graceful Close Timeout (seconds)" VerticalAlignment="Center" />
+        <TextBlock Grid.Row="1" Grid.Column="0" Text="The time in seconds to wait for a game to close gracefully after requesting it to close." FontSize="10" FontStyle="Italic" Opacity="0.7" Margin="0, -5, 0, 5"/>
+        <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0">
+            <TextBox Text="{Binding GracefulCloseTimeoutSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" MaxLength="15" Width="70" HorizontalAlignment="Left" VerticalAlignment="Center" />
+            <TextBlock Text="Default (10)" FontSize="10" FontStyle="Italic" Opacity="0.7" VerticalAlignment="Center" Margin="5,0,0,0" />
+        </StackPanel>
+
+        <Label Grid.Row="2" Grid.Column="0" Content="Pre-Close Delay (ms)" VerticalAlignment="Center" />
+        <TextBlock Grid.Row="3" Grid.Column="0" Text="Short delay before closing." FontSize="10" FontStyle="Italic" Opacity="0.7" Margin="0, -5, 0, 5"/>
+        <StackPanel Grid.Row="2" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0">
+            <TextBox Text="{Binding PreCloseDelayMs, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" MaxLength="15" Width="70" HorizontalAlignment="Left" VerticalAlignment="Center" />
+            <TextBlock Text="Default (200)" FontSize="10" FontStyle="Italic" Opacity="0.7" VerticalAlignment="Center" Margin="5,0,0,0" />
+        </StackPanel>
+
+        <Label Grid.Row="4" Grid.Column="0" Content="Steam Game Start Delay (ms)" VerticalAlignment="Center" />
+        <TextBlock Grid.Row="5" Grid.Column="0" Text="Delay for Steam games after closing." FontSize="10" FontStyle="Italic" Opacity="0.7" Margin="0, -5, 0, 5"/>
+        <StackPanel Grid.Row="4" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0">
+            <TextBox Text="{Binding SteamGameStartDelayMs, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" MaxLength="15" Width="70" HorizontalAlignment="Left" VerticalAlignment="Center" />
+            <TextBlock Text="Default (20)" FontSize="10" FontStyle="Italic" Opacity="0.7" VerticalAlignment="Center" Margin="5,0,0,0" />
+        </StackPanel>
+
+        <Label Grid.Row="6" Grid.Column="0" Content="Non-Steam Game Start Delay (ms)" VerticalAlignment="Center" />
+        <TextBlock Grid.Row="7" Grid.Column="0" Text="Longer delay for non-Steam games after closing." FontSize="10" FontStyle="Italic" Opacity="0.7" Margin="0, -5, 0, 5"/>
+        <StackPanel Grid.Row="6" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0">
+            <TextBox Text="{Binding NonSteamGameStartDelayMs, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" MaxLength="15" Width="70" HorizontalAlignment="Left" VerticalAlignment="Center" />
+            <TextBlock Text="Default (50)" FontSize="10" FontStyle="Italic" Opacity="0.7" VerticalAlignment="Center" Margin="5,0,0,0" />
+        </StackPanel>
+
+        <Label Grid.Row="8" Grid.Column="0" Content="Process Cleanup Wait (ms)" VerticalAlignment="Center" />
+        <TextBlock Grid.Row="9" Grid.Column="0" Text="Wait for process cleanup." FontSize="10" FontStyle="Italic" Opacity="0.7" Margin="0, -5, 0, 5"/>
+        <StackPanel Grid.Row="8" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0">
+            <TextBox Text="{Binding ProcessCleanupWaitMs, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" MaxLength="15" Width="70" HorizontalAlignment="Left" VerticalAlignment="Center" />
+            <TextBlock Text="Default (500)" FontSize="10" FontStyle="Italic" Opacity="0.7" VerticalAlignment="Center" Margin="5,0,0,0" />
+        </StackPanel>
+
+    </Grid>
 </UserControl>

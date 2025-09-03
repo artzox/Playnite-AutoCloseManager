@@ -1,6 +1,4 @@
-﻿// AutoCloseManager.cs
-
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.Linq;
 using System.Collections.Generic;
@@ -11,32 +9,48 @@ using Playnite.SDK.Plugins;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Threading;
+using System.Threading.Tasks;
+using System.Windows.Threading; // Required for Dispatcher
 
 namespace AutoCloseManagerPlugin
 {
     public class AutoCloseManagerSettings : ObservableObject, ISettings
     {
+        private readonly AutoCloseManager plugin;
+
         public bool EnableAutoClose { get; set; } = true;
         public int GracefulCloseTimeoutSeconds { get; set; } = 10;
         public bool ShowNotifications { get; set; } = true;
-        public int CloseDelayMs { get; set; } = 1; // Updated to 0.01 seconds
+        public int PreCloseDelayMs { get; set; } = 200; // Short delay before closing
+        public int SteamGameStartDelayMs { get; set; } = 20; // Delay for Steam games after closing
+        public int NonSteamGameStartDelayMs { get; set; } = 50; // Longer delay for non-Steam games after closing
+        public int ProcessCleanupWaitMs { get; set; } = 500; // Wait for process cleanup
 
         public AutoCloseManagerSettings()
         {
         }
 
-        public AutoCloseManagerSettings(AutoCloseManagerSettings source)
+        // Updated constructor to pass the plugin instance
+        public AutoCloseManagerSettings(AutoCloseManager plugin, AutoCloseManagerSettings source)
         {
+            this.plugin = plugin;
             EnableAutoClose = source.EnableAutoClose;
             GracefulCloseTimeoutSeconds = source.GracefulCloseTimeoutSeconds;
             ShowNotifications = source.ShowNotifications;
-            CloseDelayMs = source.CloseDelayMs;
+            PreCloseDelayMs = source.PreCloseDelayMs;
+            SteamGameStartDelayMs = source.SteamGameStartDelayMs;
+            NonSteamGameStartDelayMs = source.NonSteamGameStartDelayMs;
+            ProcessCleanupWaitMs = source.ProcessCleanupWaitMs;
         }
 
         public void BeginEdit() { }
         public void CancelEdit() { }
-        public void EndEdit() { }
+
+        // This is where the settings are saved.
+        public void EndEdit()
+        {
+            plugin.SavePluginSettings(this);
+        }
 
         public bool VerifySettings(out List<string> errors)
         {
@@ -51,12 +65,12 @@ namespace AutoCloseManagerPlugin
         private AutoCloseManagerSettings settings { get; set; }
         private readonly ProcessFinder processFinder;
 
-        public override Guid Id { get; } = Guid.Parse("12345678-1234-5678-9012-123456789012");
+        public override Guid Id { get; } = Guid.Parse("9999e785-f30e-4506-bc63-a703fa80a59d");
 
         public AutoCloseManager(IPlayniteAPI api) : base(api)
         {
             logger.Info("AutoCloseManager plugin has been initialized.");
-            settings = new AutoCloseManagerSettings();
+            settings = LoadPluginSettings<AutoCloseManagerSettings>() ?? new AutoCloseManagerSettings();
             Properties = new GenericPluginProperties
             {
                 HasSettings = true
@@ -67,10 +81,27 @@ namespace AutoCloseManagerPlugin
         public override void OnGameStarting(OnGameStartingEventArgs args)
         {
             logger.Info($"AutoClose: OnGameStarting event triggered for '{args.Game.Name}'.");
-            if (settings.EnableAutoClose)
+            if (!settings.EnableAutoClose)
             {
-                OnGameStartingHandler(args.Game);
+                return;
             }
+
+            // We must run the async logic and wait for it to complete
+            // without blocking the UI thread. This pattern achieves that.
+            var task = DoAutoCloseLogicAsync(args.Game);
+
+            // Create a DispatcherFrame to keep the UI responsive while we wait.
+            var frame = new DispatcherFrame();
+            task.ContinueWith(t =>
+            {
+                // When the task is done, tell the frame to stop.
+                // This will cause Dispatcher.PushFrame to return and unblock the method.
+                frame.Continue = false;
+            }, TaskScheduler.Default);
+
+            // This call blocks the method's execution but continues to process UI messages,
+            // keeping Playnite responsive. It returns when frame.Continue is set to false.
+            Dispatcher.PushFrame(frame);
         }
 
         public override void OnApplicationStarted(OnApplicationStartedEventArgs args)
@@ -83,48 +114,92 @@ namespace AutoCloseManagerPlugin
             logger.Info("AutoCloseManager plugin stopped");
         }
 
-        private void OnGameStartingHandler(Game newGame)
+        private async Task DoAutoCloseLogicAsync(Game newGame)
         {
             try
             {
-                logger.Info($"AutoClose: New game starting: {newGame.Name}");
-
                 var runningGames = PlayniteApi.Database.Games
                     .Where(g => g.IsRunning && g.Id != newGame.Id)
                     .ToList();
 
-                if (runningGames.Any())
-                {
-                    logger.Info($"AutoClose: Detected {runningGames.Count} other games still running. Closing them now.");
-
-                    if (settings.ShowNotifications)
-                    {
-                        PlayniteApi.Notifications.Add(new NotificationMessage(
-                            "auto-close-info",
-                            $"Closing {runningGames.Count} running game(s) to start {newGame.Name}",
-                            NotificationType.Info
-                        ));
-                    }
-
-                    foreach (var runningGame in runningGames)
-                    {
-                        CloseRunningGame(runningGame);
-                    }
-
-                    logger.Info($"AutoClose: Finished closing games. Playnite will now launch {newGame.Name}.");
-                }
-                else
+                if (!runningGames.Any())
                 {
                     logger.Info("AutoClose: No other games detected as running. No action needed.");
+                    return;
+                }
+
+                logger.Info($"AutoClose: New game starting: {newGame.Name}");
+                await Task.Delay(settings.PreCloseDelayMs);
+
+                logger.Info($"AutoClose: Detected {runningGames.Count} other games still running. Closing them now.");
+                if (settings.ShowNotifications)
+                {
+                    PlayniteApi.Notifications.Add(new NotificationMessage(
+                        "auto-close-info",
+                        $"Closing {runningGames.Count} running game(s) to start {newGame.Name}",
+                        NotificationType.Info
+                    ));
+                }
+
+                foreach (var runningGame in runningGames)
+                {
+                    await CloseRunningGame(runningGame);
+                }
+
+                logger.Info($"AutoClose: Waiting {settings.ProcessCleanupWaitMs}ms for process cleanup...");
+                await Task.Delay(settings.ProcessCleanupWaitMs);
+
+                bool isSteamGame = IsSteamGame(newGame);
+                int gameTypeDelay = isSteamGame ? settings.SteamGameStartDelayMs : settings.NonSteamGameStartDelayMs;
+
+                logger.Info($"AutoClose: {(isSteamGame ? "Steam" : "Non-Steam")} game detected. Delaying game launch for {gameTypeDelay}ms...");
+                await Task.Delay(gameTypeDelay);
+
+                logger.Info($"AutoClose: Finished closing games and waiting. Now allowing {newGame.Name} to launch.");
+
+                try
+                {
+                    newGame.LastActivity = DateTime.Now;
+                    PlayniteApi.Database.Games.Update(newGame);
+                    logger.Info($"AutoClose: Nudged NowPlaying by updating LastActivity for {newGame.Name}.");
+                }
+                catch (Exception ex)
+                {
+                    logger.Warn(ex, $"AutoClose: Failed to update LastActivity for {newGame.Name}.");
                 }
             }
             catch (Exception ex)
             {
-                logger.Error(ex, "Error in OnGameStartingHandler");
+                logger.Error(ex, "Error in DoAutoCloseLogicAsync");
             }
         }
 
-        private void CloseRunningGame(Game game)
+        private bool IsSteamGame(Game game)
+        {
+            try
+            {
+                if (game.Source?.Name.IndexOf("Steam", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return true;
+                }
+                if (game.GameActions?.Any(a => a.Path?.IndexOf("steam://", StringComparison.OrdinalIgnoreCase) >= 0) == true)
+                {
+                    return true;
+                }
+                if (!string.IsNullOrEmpty(game.InstallDirectory) && game.InstallDirectory.IndexOf("steamapps", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return true;
+                }
+                return false;
+            }
+            catch (Exception ex)
+            {
+                logger.Debug($"Error determining if game is Steam-based: {ex.Message}");
+                return false;
+            }
+        }
+
+        private async Task CloseRunningGame(Game game)
         {
             try
             {
@@ -135,23 +210,35 @@ namespace AutoCloseManagerPlugin
 
                 if (processToClose != null)
                 {
-                    logger.Info($"Delaying close of {game.Name} for {settings.CloseDelayMs}ms.");
-                    Thread.Sleep(settings.CloseDelayMs);
-
-                    logger.Info($"Attempting graceful close for process: {processToClose.ProcessName} (ID: {processToClose.Id})");
-                    processToClose.CloseMainWindow();
-
-                    if (WaitForProcessExit(processToClose, settings.GracefulCloseTimeoutSeconds * 1000))
+                    await Task.Run(() =>
                     {
-                        closed = true;
+                        logger.Info($"Attempting graceful close for process: {processToClose.ProcessName} (ID: {processToClose.Id})");
+                        processToClose.CloseMainWindow();
+
+                        if (WaitForProcessExit(processToClose, settings.GracefulCloseTimeoutSeconds * 1000))
+                        {
+                            closed = true;
+                            logger.Info($"Process {processToClose.ProcessName} closed gracefully.");
+                        }
+
+                        if (!closed && !processToClose.HasExited)
+                        {
+                            logger.Info("Graceful close failed. Forcefully killing the process.");
+                            processToClose.Kill();
+                            WaitForProcessExit(processToClose, 3000);
+                            closed = true;
+                        }
+                    });
+
+                    try
+                    {
+                        game.IsRunning = false;
+                        PlayniteApi.Database.Games.Update(game);
+                        logger.Info($"Updated Playnite database: {game.Name} is no longer running.");
                     }
-
-                    if (!closed && !processToClose.HasExited)
+                    catch (Exception ex)
                     {
-                        logger.Info("Graceful close failed. Forcefully killing the process.");
-                        processToClose.Kill();
-                        WaitForProcessExit(processToClose, 3000);
-                        closed = true;
+                        logger.Error(ex, $"Failed to update game state in database for {game.Name}");
                     }
                 }
 
@@ -161,10 +248,7 @@ namespace AutoCloseManagerPlugin
                     if (settings.ShowNotifications)
                     {
                         PlayniteApi.Notifications.Add(new NotificationMessage(
-                            "auto-close-success",
-                            $"Closed {game.Name}",
-                            NotificationType.Info
-                        ));
+                            "auto-close-success", $"Closed {game.Name}", NotificationType.Info));
                     }
                 }
                 else
@@ -173,10 +257,7 @@ namespace AutoCloseManagerPlugin
                     if (settings.ShowNotifications)
                     {
                         PlayniteApi.Notifications.Add(new NotificationMessage(
-                            "auto-close-failed",
-                            $"Failed to close {game.Name}",
-                            NotificationType.Error
-                        ));
+                            "auto-close-failed", $"Failed to close {game.Name}", NotificationType.Error));
                     }
                 }
             }
@@ -200,12 +281,12 @@ namespace AutoCloseManagerPlugin
 
         public override ISettings GetSettings(bool firstRunSettings)
         {
-            return settings;
+            return new AutoCloseManagerSettings(this, settings);
         }
 
         public override System.Windows.Controls.UserControl GetSettingsView(bool firstRunSettings)
         {
-            return null;
+            return new AutoCloseManagerSettingsView();
         }
     }
 
@@ -216,7 +297,6 @@ namespace AutoCloseManagerPlugin
         public Process FindRunningGameProcess(Game game, int? pid)
         {
             if (game == null) return null;
-
             try
             {
                 var candidateProcesses = Process.GetProcesses().Where(p =>
@@ -228,62 +308,36 @@ namespace AutoCloseManagerPlugin
                                !string.IsNullOrEmpty(p.MainWindowTitle) &&
                                p.WorkingSet64 > 100 * 1024 * 1024;
                     }
-                    catch
-                    {
-                        return false;
-                    }
+                    catch { return false; }
                 }).ToList();
-
                 logger.Debug($"Found {candidateProcesses.Count} candidate processes with windows");
                 var gameExecutables = GetGameExecutables(game);
-                string[] gameNameWords = game.Name.ToLower().Split(new char[] { ' ', '-', '_', ':', '.', '(', ')', '[', ']' },
-                    StringSplitOptions.RemoveEmptyEntries);
+                string[] gameNameWords = game.Name.ToLower().Split(new char[] { ' ', '-', '_', ':', '.', '(', ')', '[', ']' }, StringSplitOptions.RemoveEmptyEntries);
                 logger.Debug($"Game name for matching: {game.Name}, split into {gameNameWords.Length} words");
-
                 var candidates = new List<Process>();
                 var nameMatchCandidates = new List<Process>();
                 var titleMatchCandidates = new List<(Process Process, int MatchCount)>();
                 var inaccessibleCandidates = new List<Process>();
-
                 foreach (var p in candidateProcesses)
                 {
                     try
                     {
-                        bool nameMatches = gameExecutables.Any(exe =>
-                            string.Equals(exe, p.ProcessName, StringComparison.OrdinalIgnoreCase));
+                        bool nameMatches = gameExecutables.Any(exe => string.Equals(exe, p.ProcessName, StringComparison.OrdinalIgnoreCase));
                         int titleMatchScore = CalculateTitleMatchScore(p, gameNameWords);
                         string modulePath = null;
-                        try
-                        {
-                            modulePath = p.MainModule.FileName;
-                        }
-                        catch
-                        {
-                            modulePath = GetProcessPath(p);
-                        }
-
-                        if (!string.IsNullOrEmpty(modulePath) && !string.IsNullOrEmpty(game.InstallDirectory) &&
-                            modulePath.ToLower().IndexOf(game.InstallDirectory.ToLower()) >= 0)
+                        try { modulePath = p.MainModule.FileName; }
+                        catch { modulePath = GetProcessPath(p); }
+                        if (!string.IsNullOrEmpty(modulePath) && !string.IsNullOrEmpty(game.InstallDirectory) && modulePath.ToLower().IndexOf(game.InstallDirectory.ToLower()) >= 0)
                         {
                             candidates.Add(p);
                             logger.Debug($"Found process with matching path: {p.ProcessName} -> {modulePath}");
                         }
-                        else if (nameMatches)
-                        {
-                            nameMatchCandidates.Add(p);
-                        }
-                        else if (titleMatchScore > 0)
-                        {
-                            titleMatchCandidates.Add((p, titleMatchScore));
-                        }
-                        else if (string.IsNullOrEmpty(modulePath))
-                        {
-                            inaccessibleCandidates.Add(p);
-                        }
+                        else if (nameMatches) { nameMatchCandidates.Add(p); }
+                        else if (titleMatchScore > 0) { titleMatchCandidates.Add((p, titleMatchScore)); }
+                        else if (string.IsNullOrEmpty(modulePath)) { inaccessibleCandidates.Add(p); }
                     }
                     catch { /* Skip processes we can't access at all */ }
                 }
-
                 var bestMatch = FindBestMatch(candidates, titleMatchCandidates, nameMatchCandidates, inaccessibleCandidates, pid);
                 return bestMatch;
             }
@@ -299,9 +353,7 @@ namespace AutoCloseManagerPlugin
             try
             {
                 IntPtr handle = OpenProcess(ProcessAccessFlags.QueryLimitedInformation, false, process.Id);
-                if (handle == IntPtr.Zero)
-                    return null;
-
+                if (handle == IntPtr.Zero) return null;
                 try
                 {
                     var buffer = new StringBuilder(1024);
@@ -311,38 +363,20 @@ namespace AutoCloseManagerPlugin
                         return buffer.ToString();
                     }
                 }
-                finally
-                {
-                    CloseHandle(handle);
-                }
+                finally { CloseHandle(handle); }
             }
-            catch (Exception ex)
-            {
-                logger.Debug($"Error getting process path for {process.ProcessName}: {ex.Message}");
-            }
+            catch (Exception ex) { logger.Debug($"Error getting process path for {process.ProcessName}: {ex.Message}"); }
             return null;
         }
 
         private static int CalculateTitleMatchScore(Process process, string[] gameNameWords)
         {
-            if (process.MainWindowHandle == IntPtr.Zero || string.IsNullOrEmpty(process.MainWindowTitle))
-                return 0;
-            string[] windowTitleWords = process.MainWindowTitle.ToLower().Split(
-                new char[] { ' ', '-', '_', ':', '.', '(', ')', '[', ']' },
-                StringSplitOptions.RemoveEmptyEntries);
-
-            return gameNameWords.Count(gameWord =>
-                windowTitleWords.Any(titleWord =>
-                    titleWord.IndexOf(gameWord) >= 0 ||
-                    gameWord.IndexOf(titleWord) >= 0));
+            if (process.MainWindowHandle == IntPtr.Zero || string.IsNullOrEmpty(process.MainWindowTitle)) return 0;
+            string[] windowTitleWords = process.MainWindowTitle.ToLower().Split(new char[] { ' ', '-', '_', ':', '.', '(', ')', '[', ']' }, StringSplitOptions.RemoveEmptyEntries);
+            return gameNameWords.Count(gameWord => windowTitleWords.Any(titleWord => titleWord.IndexOf(gameWord) >= 0 || gameWord.IndexOf(titleWord) >= 0));
         }
 
-        private static Process FindBestMatch(
-            List<Process> candidates,
-            List<(Process Process, int MatchCount)> titleMatchCandidates,
-            List<Process> nameMatchCandidates,
-            List<Process> inaccessibleCandidates,
-            int? originalPid)
+        private static Process FindBestMatch(List<Process> candidates, List<(Process Process, int MatchCount)> titleMatchCandidates, List<Process> nameMatchCandidates, List<Process> inaccessibleCandidates, int? originalPid)
         {
             if (candidates.Count > 0)
             {
@@ -358,9 +392,7 @@ namespace AutoCloseManagerPlugin
             }
             if (titleMatchCandidates.Count > 0)
             {
-                var bestMatch = titleMatchCandidates.OrderByDescending(t => t.MatchCount)
-                                                    .ThenByDescending(t => t.Process.WorkingSet64)
-                                                    .First().Process;
+                var bestMatch = titleMatchCandidates.OrderByDescending(t => t.MatchCount).ThenByDescending(t => t.Process.WorkingSet64).First().Process;
                 logger.Debug($"Found process with matching window title: {bestMatch.ProcessName} (ID: {bestMatch.Id}, Title: {bestMatch.MainWindowTitle})");
                 return bestMatch;
             }
@@ -386,9 +418,7 @@ namespace AutoCloseManagerPlugin
             {
                 if (!string.IsNullOrEmpty(game.InstallDirectory) && Directory.Exists(game.InstallDirectory))
                 {
-                    gameExecutables = Directory.GetFiles(game.InstallDirectory, "*.exe", SearchOption.AllDirectories)
-                        .Select(path => Path.GetFileNameWithoutExtension(path))
-                        .ToList();
+                    gameExecutables = Directory.GetFiles(game.InstallDirectory, "*.exe", SearchOption.AllDirectories).Select(path => Path.GetFileNameWithoutExtension(path)).ToList();
                     var additionalNames = new List<string>();
                     foreach (var exe in gameExecutables)
                     {
@@ -411,14 +441,10 @@ namespace AutoCloseManagerPlugin
 
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool CloseHandle(IntPtr hObject);
-
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern IntPtr OpenProcess(ProcessAccessFlags processAccess, bool bInheritHandle, int processId);
-
         [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-        private static extern bool QueryFullProcessImageName(IntPtr hProcess, uint dwFlags,
-            StringBuilder lpExeName, ref uint lpdwSize);
-
+        private static extern bool QueryFullProcessImageName(IntPtr hProcess, uint dwFlags, StringBuilder lpExeName, ref uint lpdwSize);
         [Flags]
         private enum ProcessAccessFlags : uint
         {
