@@ -16,24 +16,20 @@ namespace AutoCloseManagerPlugin
 {
     public class AutoCloseManagerSettings : ObservableObject, ISettings
     {
-        private readonly AutoCloseManager plugin;
-
         public bool EnableAutoClose { get; set; } = true;
         public int GracefulCloseTimeoutSeconds { get; set; } = 10;
         public bool ShowNotifications { get; set; } = true;
-        public int PreCloseDelayMs { get; set; } = 200; // Short delay before closing
-        public int SteamGameStartDelayMs { get; set; } = 20; // Delay for Steam games after closing
-        public int NonSteamGameStartDelayMs { get; set; } = 50; // Longer delay for non-Steam games after closing
-        public int ProcessCleanupWaitMs { get; set; } = 500; // Wait for process cleanup
+        public int PreCloseDelayMs { get; set; } = 500; // Short delay before closing
+        public int SteamGameStartDelayMs { get; set; } = 1500; // Delay for Steam games after closing
+        public int NonSteamGameStartDelayMs { get; set; } = 4000; // Longer delay for non-Steam games after closing
+        public int ProcessCleanupWaitMs { get; set; } = 1000; // Wait for process cleanup
 
         public AutoCloseManagerSettings()
         {
         }
 
-        // Updated constructor to pass the plugin instance
-        public AutoCloseManagerSettings(AutoCloseManager plugin, AutoCloseManagerSettings source)
+        public AutoCloseManagerSettings(AutoCloseManagerSettings source)
         {
-            this.plugin = plugin;
             EnableAutoClose = source.EnableAutoClose;
             GracefulCloseTimeoutSeconds = source.GracefulCloseTimeoutSeconds;
             ShowNotifications = source.ShowNotifications;
@@ -45,12 +41,7 @@ namespace AutoCloseManagerPlugin
 
         public void BeginEdit() { }
         public void CancelEdit() { }
-
-        // This is where the settings are saved.
-        public void EndEdit()
-        {
-            plugin.SavePluginSettings(this);
-        }
+        public void EndEdit() { }
 
         public bool VerifySettings(out List<string> errors)
         {
@@ -281,12 +272,12 @@ namespace AutoCloseManagerPlugin
 
         public override ISettings GetSettings(bool firstRunSettings)
         {
-            return new AutoCloseManagerSettings(this, settings);
+            return settings;
         }
 
         public override System.Windows.Controls.UserControl GetSettingsView(bool firstRunSettings)
         {
-            return new AutoCloseManagerSettingsView();
+            return null;
         }
     }
 
