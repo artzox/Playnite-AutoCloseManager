@@ -10,26 +10,29 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
-using System.Windows.Threading; // Required for Dispatcher
+using System.Windows.Threading;
 
 namespace AutoCloseManagerPlugin
 {
     public class AutoCloseManagerSettings : ObservableObject, ISettings
     {
+        private readonly AutoCloseManager plugin;
+
         public bool EnableAutoClose { get; set; } = true;
         public int GracefulCloseTimeoutSeconds { get; set; } = 10;
         public bool ShowNotifications { get; set; } = true;
-        public int PreCloseDelayMs { get; set; } = 500; // Short delay before closing
-        public int SteamGameStartDelayMs { get; set; } = 500; // Delay for Steam games after closing
-        public int NonSteamGameStartDelayMs { get; set; } = 1000; // Longer delay for non-Steam games after closing
-        public int ProcessCleanupWaitMs { get; set; } = 500; // Wait for process cleanup
+        public int PreCloseDelayMs { get; set; } = 500;
+        public int SteamGameStartDelayMs { get; set; } = 50;
+        public int NonSteamGameStartDelayMs { get; set; } = 250;
+        public int ProcessCleanupWaitMs { get; set; } = 1000;
 
         public AutoCloseManagerSettings()
         {
         }
 
-        public AutoCloseManagerSettings(AutoCloseManagerSettings source)
+        public AutoCloseManagerSettings(AutoCloseManager plugin, AutoCloseManagerSettings source)
         {
+            this.plugin = plugin;
             EnableAutoClose = source.EnableAutoClose;
             GracefulCloseTimeoutSeconds = source.GracefulCloseTimeoutSeconds;
             ShowNotifications = source.ShowNotifications;
@@ -41,7 +44,12 @@ namespace AutoCloseManagerPlugin
 
         public void BeginEdit() { }
         public void CancelEdit() { }
-        public void EndEdit() { }
+
+        public void EndEdit()
+        {
+            // Now, we call a method in the main plugin instance to handle the save and update
+            plugin.UpdateSettings(this);
+        }
 
         public bool VerifySettings(out List<string> errors)
         {
@@ -69,6 +77,14 @@ namespace AutoCloseManagerPlugin
             this.processFinder = new ProcessFinder();
         }
 
+        // ADDED METHOD: This method will be called to update the internal settings
+        public void UpdateSettings(AutoCloseManagerSettings newSettings)
+        {
+            settings = newSettings;
+            SavePluginSettings(settings);
+            logger.Info("AutoCloseManager settings have been updated in memory and saved to disk.");
+        }
+
         public override void OnGameStarting(OnGameStartingEventArgs args)
         {
             logger.Info($"AutoClose: OnGameStarting event triggered for '{args.Game.Name}'.");
@@ -77,21 +93,12 @@ namespace AutoCloseManagerPlugin
                 return;
             }
 
-            // We must run the async logic and wait for it to complete
-            // without blocking the UI thread. This pattern achieves that.
             var task = DoAutoCloseLogicAsync(args.Game);
-
-            // Create a DispatcherFrame to keep the UI responsive while we wait.
             var frame = new DispatcherFrame();
             task.ContinueWith(t =>
             {
-                // When the task is done, tell the frame to stop.
-                // This will cause Dispatcher.PushFrame to return and unblock the method.
                 frame.Continue = false;
             }, TaskScheduler.Default);
-
-            // This call blocks the method's execution but continues to process UI messages,
-            // keeping Playnite responsive. It returns when frame.Continue is set to false.
             Dispatcher.PushFrame(frame);
         }
 
@@ -272,12 +279,12 @@ namespace AutoCloseManagerPlugin
 
         public override ISettings GetSettings(bool firstRunSettings)
         {
-            return settings;
+            return new AutoCloseManagerSettings(this, settings);
         }
 
         public override System.Windows.Controls.UserControl GetSettingsView(bool firstRunSettings)
         {
-            return null;
+            return new AutoCloseManagerSettingsView();
         }
     }
 
