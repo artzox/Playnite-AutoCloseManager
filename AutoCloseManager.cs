@@ -20,9 +20,9 @@ namespace AutoCloseManagerPlugin
         public int GracefulCloseTimeoutSeconds { get; set; } = 10;
         public bool ShowNotifications { get; set; } = true;
         public int PreCloseDelayMs { get; set; } = 500; // Short delay before closing
-        public int SteamGameStartDelayMs { get; set; } = 1500; // Delay for Steam games after closing
-        public int NonSteamGameStartDelayMs { get; set; } = 4000; // Longer delay for non-Steam games after closing
-        public int ProcessCleanupWaitMs { get; set; } = 1000; // Wait for process cleanup
+        public int SteamGameStartDelayMs { get; set; } = 500; // Delay for Steam games after closing
+        public int NonSteamGameStartDelayMs { get; set; } = 1000; // Longer delay for non-Steam games after closing
+        public int ProcessCleanupWaitMs { get; set; } = 500; // Wait for process cleanup
 
         public AutoCloseManagerSettings()
         {
