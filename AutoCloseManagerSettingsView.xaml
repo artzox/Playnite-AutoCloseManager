@@ -49,7 +49,7 @@
         <TextBlock Grid.Row="7" Grid.Column="0" Text="Longer delay for non-Steam games after closing." FontSize="10" FontStyle="Italic" Opacity="0.7" Margin="0, -5, 0, 5"/>
         <StackPanel Grid.Row="6" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0">
             <TextBox Text="{Binding NonSteamGameStartDelayMs, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" MaxLength="15" Width="70" HorizontalAlignment="Left" VerticalAlignment="Center" />
-            <TextBlock Text="Default (250) / Conservative (4000)" FontSize="10" FontStyle="Italic" Opacity="0.7" VerticalAlignment="Center" Margin="5,0,0,0" />
+            <TextBlock Text="Default (400) / Conservative (4000)" FontSize="10" FontStyle="Italic" Opacity="0.7" VerticalAlignment="Center" Margin="5,0,0,0" />
         </StackPanel>
 
         <Label Grid.Row="8" Grid.Column="0" Content="Process Cleanup Wait (ms)" VerticalAlignment="Center" />
