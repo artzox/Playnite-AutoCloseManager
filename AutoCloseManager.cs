@@ -19,11 +19,11 @@ namespace AutoCloseManagerPlugin
         private readonly AutoCloseManager plugin;
 
         public bool EnableAutoClose { get; set; } = true;
-        public int GracefulCloseTimeoutSeconds { get; set; } = 10;
+        public int GracefulCloseTimeoutSeconds { get; set; } = 15;
         public bool ShowNotifications { get; set; } = true;
         public int PreCloseDelayMs { get; set; } = 500;
         public int SteamGameStartDelayMs { get; set; } = 50;
-        public int NonSteamGameStartDelayMs { get; set; } = 400;
+        public int NonSteamGameStartDelayMs { get; set; } = 1000;
         public int ProcessCleanupWaitMs { get; set; } = 1000;
 
         public AutoCloseManagerSettings()
